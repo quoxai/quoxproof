@@ -93,3 +93,21 @@ class ProofStore:
                 if line.strip():
                     receipts.append(json.loads(line))
         return receipts
+
+    def tip_path(self, session_id: str) -> Path:
+        return self.session_path(session_id).with_suffix(".tip.json")
+
+    def write_tip(self, session_id: str, tip: dict) -> Path:
+        """Write a checkpoint next to the session file (pretty JSON)."""
+        path = self.tip_path(session_id)
+        with self._lock:
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(tip, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+        return path
+
+    def load_tip_path(self, path: str | os.PathLike) -> dict:
+        with Path(path).open("r", encoding="utf-8") as f:
+            return json.load(f)

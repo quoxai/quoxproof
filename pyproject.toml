@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quoxproof"
-version = "0.1.0"
+version = "0.2.0"
 description = "Offline-verifiable, Ed25519-signed receipts for every AI agent tool call"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -23,7 +23,7 @@ from .chain import GENESIS_PREV_HASH, compute_receipt_hash
 from .crypto import Keypair, raw_public_key_b64, sign_hash
 
 QUOXPROOF_VERSION = "0.1"
-SDK_VERSION = "0.1.0"
+SDK_VERSION = "0.2.0"
 TOOL_CALL_INTENT = "quox.tool.call.executed"
 
 # Visibility modes mirror AEVS (public / private / proof_only) so the migration

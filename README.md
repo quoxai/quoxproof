@@ -30,6 +30,26 @@ never collapses it to a single green tick: a receipt that proves "the SDK
 recorded this call" is a weaker claim than "this action ran through a governed
 plane", and QuoxProof says which one it can back.
 
-Status: MVP. Local signing, chaining, and offline verification are driven end to
-end. LangChain and MCP auto-hooks are wired; QuoxCORE witnessing and governed
-execution are the upgrade tiers.
+## Checkpoints (anti-rewrite anchor)
+
+Pin the head of a chain with a signed checkpoint, then detect any later
+truncation or tail-rewrite:
+
+```
+quoxproof checkpoint ~/.quox/proofs/<session>.ndjson     # writes <session>.tip.json
+quoxproof verify ~/.quox/proofs/<session>.ndjson --tip ~/.quox/proofs/<session>.tip.json
+```
+
+A checkpoint is a WARD tip by another name (Ed25519 over the head hash). It is an
+anti-rewrite anchor, not third-party witnessing, and the verifier says so.
+
+## In-browser viewer
+
+`viewer/receipt-viewer.html` is a single self-contained page: drop a receipt file
+(and optionally a checkpoint) and it verifies the signatures and hash chain in your
+browser via WebCrypto. No install, no upload, no backend.
+
+Status: local signing, chaining, checkpoints, and offline verification are driven
+end to end (Python + an in-browser verifier). LangChain and MCP auto-hooks are
+driven against the real frameworks. QuoxCORE witnessing and governed execution are
+the upgrade tiers.

@@ -24,6 +24,7 @@ from __future__ import annotations
 from .canonical import canonicalize, payload_hash, sha256_hex
 from .capture import (
     Recorder,
+    checkpoint,
     clear_reference_ids,
     configure,
     disable,
@@ -36,6 +37,7 @@ from .capture import (
     reset_config,
     tool,
 )
+from .tip import build_tip, verify_tip
 from .chain import GENESIS_PREV_HASH, compute_receipt_hash
 from .crypto import (
     Keypair,
@@ -48,7 +50,7 @@ from .receipt import build_receipt, reference_id_of
 from .store import ProofStore
 from .verify import verify_chain
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -64,6 +66,9 @@ __all__ = [
     "get_reference_id",
     "clear_reference_ids",
     "reset_config",
+    "checkpoint",
+    "build_tip",
+    "verify_tip",
     "Recorder",
     # building blocks
     "build_receipt",

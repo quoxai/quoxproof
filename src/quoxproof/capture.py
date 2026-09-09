@@ -245,6 +245,21 @@ def reset_config() -> None:
     _enabled = False
 
 
+def checkpoint() -> dict:
+    """Sign a checkpoint over the current session's chain head and store it.
+
+    Returns the tip dict. Publish or pin the tip out of band to make later
+    tail-rewrite or truncation detectable.
+    """
+    from .tip import build_tip
+
+    rec = _active()
+    receipts = rec.store.load_session(rec.session_id)
+    tip = build_tip(rec.store.keypair, rec.session_id, receipts)
+    rec.store.write_tip(rec.session_id, tip)
+    return tip
+
+
 def get_session_id() -> str:
     return _active().session_id
 

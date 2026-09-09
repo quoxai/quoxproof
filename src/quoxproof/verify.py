@@ -69,14 +69,28 @@ def _higher_rungs() -> dict:
     }
 
 
+def _checkpoint_rung(tip: dict | None, receipts: Sequence[dict], pinned: str | None) -> dict:
+    """The checkpoint rung: honest about anchor-vs-witness (see tip.py)."""
+    if tip is None:
+        return {
+            "available": False,
+            "reason": "no checkpoint supplied; run `quoxproof checkpoint` to pin the chain head",
+        }
+    from .tip import verify_tip
+
+    return verify_tip(tip, receipts, pinned_public_key_b64=pinned)
+
+
 def verify_chain(
     receipts: Sequence[dict],
     pinned_public_key_b64: str | None = None,
+    tip: dict | None = None,
 ) -> dict:
     """Verify an ordered receipt chain. ``receipts`` MUST be seq-ascending.
 
     Returns a result dict with an overall ``status`` in {INTACT, BROKEN},
     per-receipt findings, and the trust ladder. An empty chain is INTACT.
+    An optional ``tip`` (a signed checkpoint) adds the anti-rewrite rung.
     """
     per_receipt: list[dict] = []
     signatures_verified = 0
@@ -93,6 +107,7 @@ def verify_chain(
                 "sig": {"all_valid": True, "verified": 0},
                 "chain": True,
                 "key_source": None,
+                "checkpoint": _checkpoint_rung(tip, receipts, pinned_public_key_b64),
                 **_higher_rungs(),
             },
             "receipts": [],
@@ -190,6 +205,7 @@ def verify_chain(
             "sig": {"all_valid": True, "verified": signatures_verified},
             "chain": True,
             "key_source": overall_key_source,
+            "checkpoint": _checkpoint_rung(tip, receipts, pinned_public_key_b64),
             **_higher_rungs(),
         },
         "receipts": per_receipt,

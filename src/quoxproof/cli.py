@@ -27,7 +27,10 @@ def _say(verb: str, result: str, ok: bool = True) -> None:
 def _cmd_verify(args: argparse.Namespace) -> int:
     store = ProofStore()
     receipts = store.load_path(args.path)
-    result = verify_chain(receipts, pinned_public_key_b64=args.pubkey)
+    tip = None
+    if getattr(args, "tip", None):
+        tip = store.load_tip_path(args.tip)
+    result = verify_chain(receipts, pinned_public_key_b64=args.pubkey, tip=tip)
     intact = result["status"] == "INTACT"
     tl = result.get("trust_ladder", {})
     ks = tl.get("key_source")
@@ -50,6 +53,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             print(f"  chain intact:       yes")
             print(f"  key source:         {ks}"
                   f"{'  (self-consistent only, identity not verified)' if ks == 'embedded' else ''}")
+            cp = tl.get("checkpoint", {})
+            if cp.get("available"):
+                print(f"  checkpoint:         {'matches head' if cp.get('matches') else 'MISMATCH'} "
+                      f"(sig {'valid' if cp.get('sig_valid') else 'invalid'})"
+                      f"{'  ' + cp['reason'] if cp.get('reason') else ''}")
+            else:
+                print(f"  checkpoint:         not supplied  (pin one with `quoxproof checkpoint`)")
             for rung in ("witnessed", "governed_execution", "external_attested"):
                 info = tl.get(rung, {})
                 print(f"  {rung}: not available  ({info.get('reason', '')})")
@@ -82,6 +92,28 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_checkpoint(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from .tip import build_tip
+
+    store = ProofStore()
+    receipts = store.load_path(args.path)
+    if not receipts:
+        _say("checkpoint", "empty chain, nothing to pin", ok=False)
+        return 1
+    tip = build_tip(store.keypair, receipts[-1].get("session_id", "session"), receipts)
+    out = Path(args.path).with_suffix(".tip.json")
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(tip, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    _say("checkpoint", f"seq {tip['tip_seq']} · {tip['tip_chain_hash'][:12]}… -> {out}")
+    print(f"checkpoint written: {out}")
+    print(f"  tip_seq: {tip['tip_seq']}  entry_count: {tip['entry_count']}")
+    print(f"  verify later:  quoxproof verify {args.path} --tip {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="quoxproof", description="Offline-verifiable agent tool-call receipts")
     sub = p.add_subparsers(dest="command", required=True)
@@ -89,8 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("verify", help="verify a receipt chain offline")
     v.add_argument("path", help="path to a session NDJSON file")
     v.add_argument("--pubkey", help="pin a raw base64 Ed25519 public key (identity-verify)")
+    v.add_argument("--tip", help="path to a checkpoint (.tip.json) to check the chain head against")
     v.add_argument("--json", action="store_true", help="emit the full result as JSON")
     v.set_defaults(func=_cmd_verify)
+
+    c = sub.add_parser("checkpoint", help="sign a checkpoint over a chain head (anti-rewrite anchor)")
+    c.add_argument("path", help="path to a session NDJSON file")
+    c.set_defaults(func=_cmd_checkpoint)
 
     s = sub.add_parser("show", help="list receipts in a chain")
     s.add_argument("path", help="path to a session NDJSON file")

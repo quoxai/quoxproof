@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QuoxProof receipt viewer</title>
+<style>
+  :root {
+    --bg: #080b14; --panel: rgba(255,255,255,.04); --edge: rgba(255,255,255,.10);
+    --text: #e7ecf5; --dim: rgba(231,236,245,.68); --cyan: #38bdf8; --violet: #a855f7;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; line-height: 1.55; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 2.4rem 1.2rem 4rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .2rem; }
+  h1 .q { color: var(--cyan); }
+  .lede { color: var(--dim); margin: 0 0 1.6rem; max-width: 62ch; }
+  .drop { border: 1px dashed var(--edge); border-radius: 14px; background: var(--panel); padding: 1.6rem; text-align: center; transition: border-color .15s, background .15s; }
+  .drop.hover { border-color: var(--cyan); background: rgba(56,189,248,.06); }
+  .drop input { display: none; }
+  .btn { display: inline-block; margin-top: .6rem; padding: .55rem .95rem; border-radius: 9px; border: 1px solid var(--edge); background: rgba(255,255,255,.05); color: var(--text); cursor: pointer; font: inherit; }
+  .btn:hover { border-color: var(--cyan); }
+  textarea { width: 100%; min-height: 120px; margin-top: 1rem; background: rgba(6,9,17,.7); color: var(--text); border: 1px solid var(--edge); border-radius: 10px; padding: .8rem; font-family: var(--mono); font-size: .8rem; }
+  .row { display: flex; gap: .8rem; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
+  .verdict { margin-top: 1.6rem; border-radius: 14px; border: 1px solid var(--edge); background: var(--panel); padding: 1.2rem 1.3rem; }
+  .verdict.intact { border-color: rgba(52,211,153,.4); }
+  .verdict.broken { border-color: rgba(248,113,113,.45); }
+  .status { font-size: 1.15rem; font-weight: 600; }
+  .status.intact { color: var(--good); } .status.broken { color: var(--bad); }
+  .ladder { margin: 1rem 0 0; padding: 0; list-style: none; font-size: .92rem; }
+  .ladder li { display: flex; gap: .6rem; padding: .28rem 0; border-top: 1px solid rgba(255,255,255,.05); }
+  .ladder li:first-child { border-top: 0; }
+  .ladder .k { width: 190px; color: var(--dim); flex: none; }
+  .ok { color: var(--good); } .no { color: var(--dim); } .fail { color: var(--bad); } .warnc { color: var(--warn); }
+  .rlist { margin-top: 1rem; font-family: var(--mono); font-size: .78rem; color: var(--dim); }
+  .rlist div { padding: .12rem 0; }
+  .note { color: var(--dim); font-size: .82rem; margin-top: 1.4rem; }
+  code { font-family: var(--mono); color: var(--cyan); }
+  a { color: var(--cyan); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="q">Quox</span>Proof receipt viewer</h1>
+  <p class="lede">Drop a receipt file (<code>&lt;session&gt;.ndjson</code>) below, or paste its lines. Everything runs in
+    your browser: no upload, no account, no backend. The receipts carry their own public keys, so this page can
+    verify the Ed25519 signatures and the hash chain locally. Optionally add a checkpoint
+    (<code>.tip.json</code>) to check the head has not been truncated.</p>
+
+  <div class="drop" id="drop">
+    <div>Drop <code>.ndjson</code> here, or</div>
+    <label class="btn">Choose receipt file<input type="file" id="file" accept=".ndjson,.json,.txt" /></label>
+    <label class="btn">Add checkpoint (.tip.json)<input type="file" id="tipfile" accept=".json" /></label>
+    <textarea id="paste" placeholder="...or paste receipt lines here"></textarea>
+    <div class="row"><button class="btn" id="verifyBtn">Verify</button><span id="tipname" class="note"></span></div>
+  </div>
+
+  <div id="out"></div>
+
+  <p class="note">Open source: <a href="https://github.com/quoxai/quoxproof" target="_blank" rel="noopener">github.com/quoxai/quoxproof</a>
+    · <code>pip install quoxproof</code>. This viewer is a convenience; the canonical verifier is
+    <code>quoxproof verify</code>, which runs the same checks offline.</p>
+</div>
+
+<script>
+"use strict";
+const MAX_SAFE = 9007199254740991;
+const SHORT = { '"':'\\"', '\\':'\\\\', '\b':'\\b', '\f':'\\f', '\n':'\\n', '\r':'\\r', '\t':'\\t' };
+
+// WARD-CANON-1 canonical JSON, byte-for-byte the same as the Python/TS SDKs.
+function jsonString(s) {
+  let out = '"';
+  for (const ch of s) {
+    if (SHORT[ch] !== undefined) out += SHORT[ch];
+    else if (ch.charCodeAt(0) < 0x20) out += '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0');
+    else out += ch;
+  }
+  return out + '"';
+}
+function canonicalize(v) {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') {
+    if (!isFinite(v)) throw new Error('non-finite number');
+    if (Number.isInteger(v)) { if (Math.abs(v) > MAX_SAFE) throw new Error('int out of range'); return String(v); }
+    const s = String(v); if (/[eE]/.test(s)) throw new Error('exponent'); return s;
+  }
+  if (typeof v === 'string') return jsonString(v);
+  if (Array.isArray(v)) return '[' + v.map(canonicalize).join(',') + ']';
+  const keys = Object.keys(v).sort((a, b) => {
+    const ba = new TextEncoder().encode(a), bb = new TextEncoder().encode(b);
+    const n = Math.min(ba.length, bb.length);
+    for (let i = 0; i < n; i++) { if (ba[i] !== bb[i]) return ba[i] - bb[i]; }
+    return ba.length - bb.length;
+  });
+  return '{' + keys.map(k => jsonString(k) + ':' + canonicalize(v[k])).join(',') + '}';
+}
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function b64ToBytes(b64) { const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+const GENESIS = '0'.repeat(64);
+
+async function edVerify(hashHex, sigB64, pubB64) {
+  try {
+    const key = await crypto.subtle.importKey('raw', b64ToBytes(pubB64), { name: 'Ed25519' }, false, ['verify']);
+    return await crypto.subtle.verify({ name: 'Ed25519' }, key, b64ToBytes(sigB64), new TextEncoder().encode(hashHex));
+  } catch (e) { return null; } // null => could not run (unsupported)
+}
+
+const NONBODY = new Set(['receipt_hash', 'sig']);
+function body(r) { const o = {}; for (const k of Object.keys(r)) if (!NONBODY.has(k)) o[k] = r[k]; return o; }
+
+async function verifyChain(receipts, tip) {
+  if (!receipts.length) return { status: 'INTACT', count: 0, sigs: 0, keySource: null, perline: [] };
+  let prev = GENESIS, sigs = 0, unsupported = false; const sources = new Set(); const perline = [];
+  for (let i = 0; i < receipts.length; i++) {
+    const r = receipts[i], seq = i + 1;
+    if (r.seq !== seq) return { status: 'BROKEN', reason: 'SEQ_INVALID', detail: `expected ${seq}, got ${r.seq}`, perline };
+    if (r.prev_hash !== prev) return { status: 'BROKEN', reason: 'CHAIN_LINK_BROKEN', detail: `seq ${r.seq}`, perline };
+    const computed = await sha256Hex(canonicalize(body(r)));
+    if (computed !== r.receipt_hash) return { status: 'BROKEN', reason: 'RECEIPT_HASH_MISMATCH', detail: `seq ${r.seq}`, perline };
+    const src = r.sig && r.sig.public_key ? 'embedded' : 'none';
+    const ok = r.sig ? await edVerify(r.receipt_hash, r.sig.signature, r.sig.public_key) : false;
+    if (ok === null) unsupported = true;
+    else if (ok !== true) return { status: 'BROKEN', reason: 'SIGNATURE_INVALID', detail: `seq ${r.seq}`, perline };
+    else { sigs++; sources.add(src); }
+    perline.push(`#${String(r.seq).padStart(2, ' ')}  ${r.tool_name || '?'}  ${(r.status || '')}  ${r.receipt_hash.slice(0, 12)}…`);
+    prev = r.receipt_hash;
+  }
+  if (unsupported) return { status: 'UNSUPPORTED', perline };
+  const res = { status: 'INTACT', count: receipts.length, sigs, keySource: [...sources][0] || null, perline };
+  if (tip) {
+    const head = receipts[receipts.length - 1];
+    const sigOk = await edVerify(tip.tip_chain_hash, tip.sig.signature, tip.sig.public_key);
+    res.checkpoint = {
+      sigValid: sigOk === true,
+      matches: head.receipt_hash === tip.tip_chain_hash && head.seq === tip.tip_seq && receipts.length === tip.entry_count,
+    };
+  }
+  return res;
+}
+
+function parseNdjson(text) {
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map(l => JSON.parse(l));
+}
+
+let tipObj = null;
+function render(res) {
+  const out = document.getElementById('out');
+  if (res.status === 'UNSUPPORTED') {
+    out.innerHTML = `<div class="verdict"><div class="status warnc">Ed25519 not available in this browser</div>
+      <p class="note">Your browser cannot run Ed25519 in WebCrypto yet. The hash chain checked out, but signatures could not be verified here. Use <code>quoxproof verify</code>, or try a current Chrome, Safari or Firefox.</p></div>`;
+    return;
+  }
+  const intact = res.status === 'INTACT';
+  const cp = res.checkpoint;
+  const rung = (k, cls, txt) => `<li><span class="k">${k}</span><span class="${cls}">${txt}</span></li>`;
+  out.innerHTML = `<div class="verdict ${intact ? 'intact' : 'broken'}">
+    <div class="status ${intact ? 'intact' : 'broken'}">${res.status}${intact ? '' : ' — ' + (res.reason || '')}</div>
+    ${res.detail ? `<p class="note">${res.detail}</p>` : ''}
+    ${intact ? `<ul class="ladder">
+      ${rung('observe', 'ok', 'yes')}
+      ${rung('signature valid', 'ok', `yes (${res.sigs} receipts)`)}
+      ${rung('chain intact', 'ok', 'yes')}
+      ${rung('key source', res.keySource === 'embedded' ? 'warnc' : 'ok', (res.keySource || 'n/a') + (res.keySource === 'embedded' ? ' (self-consistent only, identity not verified)' : ''))}
+      ${rung('checkpoint', cp ? (cp.matches && cp.sigValid ? 'ok' : 'fail') : 'no', cp ? (cp.matches && cp.sigValid ? 'matches head' : 'MISMATCH') : 'not supplied')}
+      ${rung('witnessed', 'no', 'not available (QuoxCORE/WARD tier)')}
+      ${rung('governed execution', 'no', 'not available (Quox governed plane)')}
+      ${rung('external attested', 'no', 'not available')}
+    </ul>
+    <div class="rlist">${res.perline.map(l => `<div>${l}</div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+async function run() {
+  const text = document.getElementById('paste').value.trim();
+  if (!text) { document.getElementById('out').innerHTML = '<p class="note">Add a receipt file or paste lines first.</p>'; return; }
+  let receipts;
+  try { receipts = parseNdjson(text); } catch (e) { document.getElementById('out').innerHTML = `<p class="note">Could not parse receipts: ${e.message}</p>`; return; }
+  try { render(await verifyChain(receipts, tipObj)); } catch (e) { document.getElementById('out').innerHTML = `<p class="note">Verify error: ${e.message}</p>`; }
+}
+
+const drop = document.getElementById('drop'), paste = document.getElementById('paste');
+document.getElementById('file').addEventListener('change', e => { const f = e.target.files[0]; if (f) f.text().then(t => { paste.value = t; run(); }); });
+document.getElementById('tipfile').addEventListener('change', e => { const f = e.target.files[0]; if (f) f.text().then(t => { try { tipObj = JSON.parse(t); document.getElementById('tipname').textContent = 'checkpoint loaded: ' + (f.name); } catch (_) { document.getElementById('tipname').textContent = 'bad checkpoint file'; } }); });
+document.getElementById('verifyBtn').addEventListener('click', run);
+['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (!f) return; f.text().then(t => { if (f.name.endsWith('.tip.json')) { try { tipObj = JSON.parse(t); document.getElementById('tipname').textContent = 'checkpoint loaded: ' + f.name; } catch (_) {} } else { paste.value = t; run(); } }); });
+</script>
+</body>
+</html>
