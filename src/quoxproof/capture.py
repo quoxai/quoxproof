@@ -13,6 +13,7 @@ unchanged, matching AEVS's "zero changes to your tools".
 from __future__ import annotations
 
 import functools
+import sys
 import threading
 import time
 import uuid
@@ -41,6 +42,10 @@ class Recorder:
         self._seq = seq
         self._prev_hash = prev
         self._references: list[dict] = []
+        # QUOXTRUST F11: durable-write accounting. A failed store.append must
+        # never silently vanish nor mask the tool outcome; it is counted here so
+        # an evidence hole is observable (the quoxflow-B4 accounting contract).
+        self.write_failures = 0
 
     def record_call(
         self,
@@ -58,8 +63,12 @@ class Recorder:
     ) -> dict:
         """Build, sign, persist one receipt; return it."""
         with self._lock:
-            self._seq += 1
-            seq = self._seq
+            # QUOXTRUST F11: compute the next seq/prev LOCALLY and commit the
+            # chain head only AFTER a durable append. Previously _seq/_prev_hash
+            # advanced before store.append, so a failed write left the head
+            # pointing at a receipt that was never persisted — the next receipt
+            # then linked onto a phantom, corrupting the chain.
+            seq = self._seq + 1
             prev = self._prev_hash
             receipt = build_receipt(
                 keypair=self.store.keypair,
@@ -79,8 +88,26 @@ class Recorder:
                 started_at=started_at,
                 ended_at=ended_at,
             )
+            try:
+                self.store.append(self.session_id, receipt)
+            except Exception as exc:  # noqa: BLE001
+                # ACCOUNT the write failure and CARRY ON — never mask the tool
+                # outcome (the caller still gets its result/exception) and never
+                # swallow the failure silently. The chain head is NOT advanced,
+                # so the next receipt takes this slot cleanly (a dropped receipt,
+                # not a corrupted chain). The counter + warning make the hole
+                # observable.
+                self.write_failures += 1
+                receipt["_persisted"] = False
+                sys.stderr.write(
+                    f"[quoxproof] WARNING: receipt write failed (seq {seq}, "
+                    f"session {self.session_id}): {exc}. Tool outcome preserved; "
+                    f"evidence hole accounted (write_failures={self.write_failures}).\n"
+                )
+                return receipt
+            # Durable: commit the chain head and the reference.
+            self._seq = seq
             self._prev_hash = receipt["receipt_hash"]
-            self.store.append(self.session_id, receipt)
             self._references.append(
                 {
                     "seq": seq,
