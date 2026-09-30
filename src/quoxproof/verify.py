@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from .chain import GENESIS_PREV_HASH, compute_receipt_hash
-from .crypto import public_key_from_raw_b64, verify_hash_signature
+from .crypto import derive_key_id, public_key_from_raw_b64, verify_hash_signature
 
 _HEX64 = set("0123456789abcdef")
 _REQUIRED_FIELDS = (
@@ -176,6 +176,18 @@ def verify_chain(
                     )
                     if not sig_valid:
                         reason = "signature_mismatch"
+                    else:
+                        # QUOXTRUST F9: sig.key_id is an IDENTITY claim (which key
+                        # signed). Bind it to the key that actually verified — an
+                        # attacker must not present a trusted signer's key_id with
+                        # their own public_key + a valid signature and have a
+                        # consumer trust the borrowed identity. Only enforced when
+                        # a key_id is claimed; a receipt with no key_id carries no
+                        # identity claim to bind.
+                        claimed_key_id = sig.get("key_id")
+                        if claimed_key_id and claimed_key_id != derive_key_id(pub):
+                            sig_valid = False
+                            reason = "key_id_mismatch"
 
         if not sig_valid:
             return _broken(
