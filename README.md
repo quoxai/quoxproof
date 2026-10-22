@@ -1,5 +1,7 @@
 # QuoxProof
 
+![Quox project overview](docs/assets/readme-hero.png)
+
 Offline-verifiable, Ed25519-signed receipts for every AI agent tool call.
 
 ```python
